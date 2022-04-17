@@ -1,11 +1,12 @@
 # system
 import os
 import os.path
+import sys
 # time
+import time
 import random
 from datetime import datetime as date
 from datetime import timedelta
-from time import sleep
 # math
 import math
 import numpy as np
@@ -109,8 +110,9 @@ class mirai_edge:
         return bb_lower, bb_upper, rsi, prices_mean, prices_low, prices_high
             
     def mirai_no_yaiba(self, x, y, c, MIN_OPERATIONS):
-        DETAIL_SLOPE=20
-        DETAIL_INTERCEPT=20
+        DETAIL_SLOPE = 20
+        DETAIL_INTERCEPT = 20
+        MAX_Y_FACTOR = 5.0
         MIN_PERCENTAGE = 0.85
         TRUE_POSITIVE = 1
         TRUE_NEGATIVE = 1
@@ -146,7 +148,7 @@ class mirai_edge:
         b = 0.0
         best_score = 0
         for angle in np.linspace(0, math.pi / 2.0, DETAIL_SLOPE):
-            for b_tmp in np.linspace(min_y, max_y * 5.0, DETAIL_INTERCEPT):
+            for b_tmp in np.linspace(min_y, max_y * MAX_Y_FACTOR, DETAIL_INTERCEPT):
                 # tangent is infinite
                 if angle == math.pi / 2.0:
                     break
@@ -159,29 +161,36 @@ class mirai_edge:
         return m, b, best_score
 
     def mirai_no_sentaku(self, start_date, end_date):
+        batch_number = 1
+        number_of_batches = 1
+        if len(sys.argv) > 1:
+            batch_number = int(sys.argv[1])
+            number_of_batches = int(sys.argv[2])
         # read ticker list
         f = open("./data/tickers.txt", "r")
         tickers = []
         for ticker in f:
             tickers.append(ticker.strip())
         f.close()
+        tickers_per_batch = len(tickers) // number_of_batches
         # compute hyperplane per ticker
-        for ticker in tickers:
+        for i in range(tickers_per_batch * (batch_number - 1), tickers_per_batch * batch_number):
+            ticker = tickers[i]
             print("WORKING ON " + ticker)
             # check if data folder exists
             if not os.path.isdir("./data/" + ticker):
                 os.mkdir("./data/" + ticker)
             # EXPECTED MOVE
             EXPECTED_MOVE_MIN = 0.03
-            EXPECTED_MOVE_MAX = 0.04
-            EXPECTED_MOVE_ITERATIONS = 2
+            EXPECTED_MOVE_MAX = 0.05
+            EXPECTED_MOVE_ITERATIONS = 3
             # LOSS FACTOR
             LOSS_FACTOR_MIN = 2
             LOSS_FACTOR_MAX = 2
             LOSS_FACTOR_ITERATIONS = 1
             # STANDARD DEVIATIONS
-            STD_DEVIATIONS_MIN =1.9
-            STD_DEVIATIONS_MAX =2.1
+            STD_DEVIATIONS_MIN = 1.9
+            STD_DEVIATIONS_MAX = 2.1
             STD_DEVIATIONS_ITERATIONS = 3
             # SMA PERIOD
             SMA_PERIOD_MIN = 18
@@ -210,9 +219,6 @@ class mirai_edge:
             MIN_OPERATIONS_MAX_SELL = 10
             MIN_OPERATIONS_STEP = 10
             # save used info
-            x_buy_final = []
-            y_buy_final = []
-            a_buy_final = []
             slope_final_buy= 0
             intercept_final_buy = 0
             best_score_buy = 0
@@ -237,8 +243,11 @@ class mirai_edge:
             rsi_high_sell = 0
             max_hold_sell = 0
             min_operations_sell = 0
+            # get ticker history
             tick = yf.Ticker(ticker)
             ticker_data = tick.history(start=start_date, end=end_date, interval="1d")
+            # count number of iterations
+            noi = 0
             # COMBINE!
             for EXPECTED_MOVE in np.linspace(EXPECTED_MOVE_MIN, EXPECTED_MOVE_MAX, EXPECTED_MOVE_ITERATIONS):
                 for LOSS_FACTOR in np.linspace(LOSS_FACTOR_MIN, LOSS_FACTOR_MAX, LOSS_FACTOR_ITERATIONS):
@@ -250,6 +259,8 @@ class mirai_edge:
                                         for MAX_HOLD in range(MAX_HOLD_MIN, MAX_HOLD_MAX + MAX_HOLD_STEP, MAX_HOLD_STEP):
                                             for MIN_OPERATIONS_BUY in range(MIN_OPERATIONS_MIN_BUY, MIN_OPERATIONS_MAX_BUY + MIN_OPERATIONS_STEP, MIN_OPERATIONS_STEP):
                                                 for MIN_OPERATIONS_SELL in range(MIN_OPERATIONS_MIN_SELL, MIN_OPERATIONS_MAX_SELL + MIN_OPERATIONS_STEP, MIN_OPERATIONS_STEP):
+                                                    noi = noi + 1
+                                                    print(noi)
                                                     # ----
                                                     # get data
                                                     # ----
@@ -280,15 +291,15 @@ class mirai_edge:
                                                             # take decision
                                                             decision = -1
                                                             for j in range(i + 1, min(i + MAX_HOLD, n)):
-                                                                if prices_low[j] <= (1 - EXPECTED_MOVE) * prices_mean[i]:
-                                                                    decision = 1
-                                                                    break
-                                                                elif prices_high[j] >= (1 + EXPECTED_MOVE * LOSS_FACTOR) * prices_mean[i]:
+                                                                if prices_high[j] > (1 + EXPECTED_MOVE * LOSS_FACTOR) * prices_mean[i]:
                                                                     decision = 0
+                                                                    break
+                                                                elif prices_low[j] <= (1 - EXPECTED_MOVE) * prices_mean[i]:
+                                                                    decision = 1
                                                                     break
                                                             if decision != -1:
                                                                 x_sell.append(prices_mean[i] / bb_upper[i] - 1.0)
-                                                                y_sell.append(rsi[i] / 100.0 - 0.5)
+                                                                y_sell.append(rsi[i] / 100.0 - RSI_HIGH / 100.0)
                                                                 a_sell.append(decision)
 
                                                         # buy
@@ -303,12 +314,13 @@ class mirai_edge:
                                                                     break
                                                             if decision != -1:
                                                                 x_buy.append(bb_lower[i] / prices_mean[i] - 1.0)
-                                                                y_buy.append(-(rsi[i] / 100.0 - 0.5))
+                                                                y_buy.append((1.0 - rsi[i] / 100.0) - (1.0 - RSI_LOW / 100.0))
                                                                 a_buy.append(decision)
                                                     slope_buy, intercept_buy, score_buy = self.mirai_no_yaiba(x_buy, y_buy, a_buy, MIN_OPERATIONS=MIN_OPERATIONS_BUY)
                                                     slope_sell, intercept_sell, score_sell = self.mirai_no_yaiba(x_sell, y_sell, a_sell, MIN_OPERATIONS=MIN_OPERATIONS_SELL)
                                                     if score_buy > best_score_buy:
-                                                        
+                                                        '''
+                                                        print("BUY")
                                                         plt.scatter(x_buy, y_buy,c=a_buy)
                                                         x_line = np.linspace(0,0.005,100)
                                                         y_line = []
@@ -316,10 +328,7 @@ class mirai_edge:
                                                             y_line.append(slope_buy * x_line[k] + intercept_buy)
                                                         plt.plot(x_line, y_line)
                                                         plt.show()
-                                                        
-                                                        x_buy_final = x_buy
-                                                        y_buy_final = y_buy
-                                                        a_buy_final = a_buy
+                                                        '''
                                                         slope_final_buy = slope_buy
                                                         intercept_final_buy = intercept_buy
                                                         best_score_buy = score_buy
@@ -334,15 +343,16 @@ class mirai_edge:
                                                         min_operations_buy = MIN_OPERATIONS_BUY
 
                                                     if score_sell > best_score_sell:
-                                                        
+                                                        '''
+                                                        print("SELL")
                                                         plt.scatter(x_sell, y_sell,c=a_sell)
-                                                        x_line = np.linspace(0,0.05,100)
+                                                        x_line = np.linspace(0,0.005,100)
                                                         y_line = []
                                                         for k in range(0,100):
                                                             y_line.append(slope_sell * x_line[k] + intercept_sell)
                                                         plt.plot(x_line, y_line)
                                                         plt.show()
- 
+                                                        '''
                                                         slope_final_sell = slope_sell
                                                         intercept_final_sell = intercept_sell
                                                         best_score_sell = score_sell
